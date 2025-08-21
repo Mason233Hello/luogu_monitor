@@ -8,6 +8,7 @@ from datetime import datetime
 import logging
 import os
 import sys
+import msvcrt  # 用于检测键盘输入
 
 # 尝试导入 win10toast，如果失败则使用备用方案
 try:
@@ -50,6 +51,7 @@ class LuoguWebSocketClient:
         self.heartbeat_thread = None
         self.reconnect_thread = None
         self.force_reconnect_thread = None
+        self.keyboard_thread = None  # 键盘监听线程
         self.stop_flag = threading.Event()
         
         # 初始化通知器
@@ -282,6 +284,39 @@ class LuoguWebSocketClient:
         self.force_reconnect_thread.start()
         logging.info("强制重连线程已启动，检查间隔: 30秒")
     
+    def start_keyboard_listener(self):
+        """启动键盘监听线程"""
+        if self.keyboard_thread and self.keyboard_thread.is_alive():
+            return
+            
+        def keyboard_listener_loop():
+            logging.info("键盘监听已启动，按 'R' 键重置所有连接")
+            while not self.stop_flag.is_set():
+                try:
+                    # 检测键盘输入
+                    if msvcrt.kbhit():
+                        key = msvcrt.getch().decode('utf-8').upper()
+                        if key == 'R':
+                            logging.info("检测到重置快捷键，重置所有连接...")
+                            self.show_notification("洛谷监控", "正在重置所有连接...")
+                            self.reset_connections()
+                except Exception as e:
+                    logging.error("键盘监听出错: %s", e)
+                time.sleep(0.1)  # 短暂休眠以减少CPU占用
+                
+        self.keyboard_thread = threading.Thread(target=keyboard_listener_loop)
+        self.keyboard_thread.daemon = True
+        self.keyboard_thread.start()
+    
+    def reset_connections(self):
+        """重置所有连接"""
+        logging.info("正在重置所有连接...")
+        self.disconnect()
+        # 清空已读消息集合，避免重置后错过重复消息
+        self.seen_messages.clear()
+        # 立即尝试重新连接
+        self.schedule_reconnect(0)
+    
     def disconnect(self):
         """断开WebSocket连接"""
         if self.ws:
@@ -291,13 +326,13 @@ class LuoguWebSocketClient:
                 pass
         self.connected = False
     
-    def schedule_reconnect(self):
+    def schedule_reconnect(self, delay=5):
         """安排重新连接"""
         if self.stop_flag.is_set():
             return
             
-        logging.info("将在 5 秒后尝试重新连接...")
-        time.sleep(5)
+        logging.info("将在 %d 秒后尝试重新连接...", delay)
+        time.sleep(delay)
         
         if not self.stop_flag.is_set():
             try:
@@ -311,9 +346,13 @@ class LuoguWebSocketClient:
         """运行WebSocket客户端"""
         logging.info("启动洛谷私信监控...")
         logging.info("按 Ctrl+C 停止")
+        logging.info("按 'R' 键重置所有连接")
         
         # 显示启动通知
-        self.show_notification("洛谷监控", "洛谷私信监控已启动")
+        self.show_notification("洛谷监控", "洛谷私信监控已启动\n按 'R' 键重置所有连接")
+        
+        # 启动键盘监听
+        self.start_keyboard_listener()
         
         try:
             self.connect()
